@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Prompter V15</title>
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@700;900&display=swap" rel="stylesheet">
+    <style>
+        :root { --accent: #00f2ff; --bg: #0a0a0a; }
+        body { background: var(--bg); color: white; font-family: 'Cairo', sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+        .display { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 20px; }
+        #text-display { font-size: 35px; font-weight: 900; color: var(--accent); line-height: 1.4; }
+        #status { font-size: 14px; color: #777; margin-top: 20px; }
+        .controls { background: #151515; padding: 25px; border-radius: 25px 25px 0 0; border-top: 1px solid #333; }
+        textarea, input { background: #222; border: 1px solid #444; color: white; border-radius: 12px; padding: 15px; width: 100%; box-sizing: border-box; margin-bottom: 10px; font-family: 'Cairo'; }
+        .main-btn { background: var(--accent); color: black; width: 100%; padding: 20px; border-radius: 15px; border: none; font-weight: 900; font-size: 18px; cursor: pointer; }
+        #force-audio-btn { display: none; background: #ff9d00; color: black; width: 100%; margin-top: 10px; padding: 10px; border-radius: 10px; border: none; font-weight: bold; font-size: 16px; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+    <div class="display">
+        <div id="text-display">اضغط ابدأ للبدء</div>
+        <button id="force-audio-btn" onclick="retryAudio()">إجبار الصوت على العمل 🔊</button>
+        <div id="status">الحالة: جاهز</div>
+    </div>
+
+    <div class="controls">
+        <input type="password" id="api-key" placeholder="API Key (ElevenLabs)">
+        <textarea id="script-box" rows="2" placeholder="اكتب جملتين للتجربة..."></textarea>
+        <button class="main-btn" onclick="startApp()">ابدأ الجلسة 🚀</button>
+    </div>
+
+    <script>
+        let index = 0;
+        let sentences = [];
+        let audio = new Audio();
+        let currentRec = null;
+        let speechTimeout = null;
+        let forceAudioTimeout = null;
+
+        async function startApp() {
+            sentences = document.getElementById('script-box').value.split('\n').filter(s => s.trim());
+            if (!sentences.length) return alert("اكتب سكريبت!");
+            index = 0;
+
+            // تفعيل أولي للصوت (إلزامي للآيفون)
+            window.speechSynthesis.cancel();
+            const u = new SpeechSynthesisUtterance("");
+            window.speechSynthesis.speak(u);
+
+            play();
+        }
+
+        async function play() {
+            if (index >= sentences.length) {
+                updateUI("🎉 انتهى السكريبت!", "تم بنجاح");
+                return;
+            }
+
+            const text = sentences[index];
+            const key = document.getElementById('api-key').value.trim();
+            updateUI(text, "جاري التحضير...");
+            document.getElementById('force-audio-btn').style.display = "none";
+
+            if (key) {
+                try {
+                    const r = await fetch("https://api.elevenlabs.io/v1/text-to-speech/wxweiHvoC2r2jFM7mS8b", {
+                        method: "POST",
+                        headers: { "xi-api-key": key, "Content-Type": "application/json" },
+                        body: JSON.stringify({ text: text, model_id: "eleven_multilingual_v2" })
+                    });
+                    if (r.ok) {
+                        const b = await r.blob();
+                        audio.src = URL.createObjectURL(b);
+                        audio.onended = listen;
+                        audio.play();
+                        updateUI(text, "🔊 صوت احترافي");
+                        return;
+                    }
+                } catch (e) {}
+            }
+
+            // المود المجاني
+            playLocal(text);
+        }
+
+        function playLocal(text) {
+            updateUI(text, "جاري تشغيل الصوت...");
+
+            // زرار الإجبار يظهر بس لو الصوت مشتغلش في 3 ثواني
+            forceAudioTimeout = setTimeout(() => {
+                document.getElementById('force-audio-btn').style.display = "block";
+            }, 3000);
+
+            window.speechSynthesis.cancel();
+
+            const u = new SpeechSynthesisUtterance(text);
+            u.lang = 'ar-SA';
+            u.rate = 0.9;
+
+            u.onstart = () => {
+                clearTimeout(forceAudioTimeout);
+                document.getElementById('force-audio-btn').style.display = "none";
+                updateUI(text, "🔊 جاري القراءة...");
+            };
+
+            u.onend = () => {
+                clearTimeout(speechTimeout);
+                listen();
+            };
+
+            // timeout لو الصوت اتجمد ومشتغلش
+            speechTimeout = setTimeout(() => {
+                window.speechSynthesis.cancel();
+                listen();
+            }, 8000);
+
+            window.speechSynthesis.speak(u);
+        }
+
+        function retryAudio() {
+            clearTimeout(forceAudioTimeout);
+            clearTimeout(speechTimeout);
+            document.getElementById('force-audio-btn').style.display = "none";
+            if (sentences[index]) playLocal(sentences[index]);
+        }
+
+        function listen() {
+            const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!Speech) {
+                index++;
+                play();
+                return;
+            }
+
+            // إيقاف الـ recognition القديم لو لسه شغال
+            if (currentRec) {
+                try { currentRec.stop(); } catch (e) {}
+                currentRec = null;
+            }
+
+            const rec = new Speech();
+            currentRec = rec;
+            rec.lang = 'ar-EG';
+
+            rec.onstart = () => updateUI(sentences[index], "🎙️ سامعك.. قول كمل");
+
+            rec.onresult = () => {
+                currentRec = null;
+                index++;
+                play();
+            };
+
+            rec.onerror = () => {
+                currentRec = null;
+                setTimeout(() => { index++; play(); }, 2000);
+            };
+
+            rec.onend = () => {
+                currentRec = null;
+            };
+
+            try {
+                rec.start();
+            } catch (e) {
+                setTimeout(() => { index++; play(); }, 2000);
+            }
+        }
+
+        function updateUI(t, s) {
+            document.getElementById('text-display').innerText = t;
+            document.getElementById('status').innerText = s;
+        }
+    </script>
+</body>
+</html>
